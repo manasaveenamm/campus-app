@@ -2,7 +2,7 @@ pipeline {
 agent any
 
 ```
-environment {
+environment { 
     AWS_REGION   = 'ap-south-1'
     ECR_REGISTRY = '417780656027.dkr.ecr.ap-south-1.amazonaws.com'
     ECR_REPO     = 'spring-app'
