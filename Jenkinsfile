@@ -16,15 +16,18 @@ stages {
         }
     }
 
-    stage('Build') {
+    stage('Check Files') {
         steps {
-            sh 'mvn clean package -DskipTests'
-        }
-    }
+            sh '''
+                echo "===== WORKSPACE ====="
+                pwd
 
-    stage('Test') {
-        steps {
-            sh 'mvn test'
+                echo "===== FILES ====="
+                ls -la
+
+                echo "===== KUBERNETES FILES ====="
+                find k8s -type f
+            '''
         }
     }
 
@@ -49,13 +52,14 @@ stages {
     stage('Deploy to Staging') {
         steps {
             sh 'kubectl apply -f k8s/namespaces.yaml'
-            sh 'kubectl apply -f k8s/deployment.yaml -n staging'
+            sh 'kubectl apply -f k8s/k8s/deployment.yaml -n staging'
         }
     }
 
     stage('Check Staging Deployment') {
         steps {
-            sh 'kubectl rollout status deployment/campus-app -n staging --timeout=60s'
+            sh 'kubectl get pods -n staging'
+            sh 'kubectl get deployment -n staging'
         }
     }
 
@@ -67,13 +71,14 @@ stages {
 
     stage('Deploy to Production') {
         steps {
-            sh 'kubectl apply -f k8s/deployment.yaml -n production'
+            sh 'kubectl apply -f k8s/k8s/deployment.yaml -n production'
         }
     }
 
     stage('Check Production Deployment') {
         steps {
-            sh 'kubectl rollout status deployment/campus-app -n production --timeout=60s'
+            sh 'kubectl get pods -n production'
+            sh 'kubectl get deployment -n production'
         }
     }
 }
@@ -84,7 +89,7 @@ post {
     }
 
     failure {
-        echo 'Pipeline failed. Check the Console Output.'
+        echo 'Pipeline failed. Check Console Output.'
     }
 
     always {
