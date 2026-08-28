@@ -1,4 +1,4 @@
-```groovy
+
 pipeline {
     agent any
 
@@ -15,7 +15,6 @@ pipeline {
                 checkout scm
 
                 script {
-                    // Create image tag after checkout
                     env.IMAGE_TAG = "${BUILD_NUMBER}-${sh(
                         script: 'git rev-parse --short=7 HEAD',
                         returnStdout: true
@@ -37,6 +36,12 @@ pipeline {
 
                     echo "Searching for pom.xml:"
                     find . -name pom.xml -type f
+
+                    echo "Searching for Dockerfile:"
+                    find . -name Dockerfile -type f
+
+                    echo "Kubernetes files:"
+                    find . -path "*/k8s/*" -type f
                 '''
             }
         }
@@ -162,4 +167,4 @@ pipeline {
         }
     }
 }
-```
+
