@@ -14,6 +14,15 @@ pipeline {
                 checkout scm
             }
         }
+        stage('Check Files') {
+    steps {
+        sh '''
+            pwd
+            ls -la
+            find . -name pom.xml
+        '''
+    }
+}
         
         stage('Unit Tests') {
             steps {
