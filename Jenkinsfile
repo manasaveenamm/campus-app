@@ -1,100 +1,134 @@
 pipeline {
-agent any
+    agent any
 
-environment {
-    AWS_REGION = 'ap-south-1'
-    ECR_REGISTRY = '417780656027.dkr.ecr.ap-south-1.amazonaws.com'
-    ECR_REPOSITORY = 'spring-app'
-    IMAGE_TAG = 'latest'
+    environment {
+        AWS_REGION   = "ap-south-1"
+        ECR_REPO     = "417780656027.dkr.ecr.ap-south-1.amazonaws.com/campus-app"
+        SHORT_COMMIT = "${env.GIT_COMMIT ? env.GIT_COMMIT.take(7) : 'local'}"
+        IMAGE_TAG    = "${env.BUILD_NUMBER}-${SHORT_COMMIT}"
+    }
+
+    options {
+        timestamps()
+        disableConcurrentBuilds()
+    }
+
+    stages {
+
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+
+        stage('Build & Unit Test') {
+            steps {
+                dir('application') {
+                    sh 'mvn clean test package -B'
+                }
+            }
+            post {
+                always {
+                    junit 'application/target/surefire-reports/*.xml'
+                }
+                // Pipeline fails automatically here if tests fail - no further stages run
+            }
+        }
+
+        stage('Docker Build') {
+            steps {
+                sh "docker build -f docker/Dockerfile -t ${ECR_REPO}:${IMAGE_TAG} ."
+                sh "docker tag ${ECR_REPO}:${IMAGE_TAG} ${ECR_REPO}:latest"
+            }
+        }
+
+        stage('Push to ECR') {
+            steps {
+                sh """
+                    aws ecr get-login-password --region ${AWS_REGION} | \
+                    docker login --username AWS --password-stdin ${ECR_REPO}
+                    docker push ${ECR_REPO}:${IMAGE_TAG}
+                    docker push ${ECR_REPO}:latest
+                """
+            }
+        }
+
+        stage('Deploy to Dev') {
+            steps {
+                sh """
+                    kubectl set image deployment/campus-app campus-app=${ECR_REPO}:${IMAGE_TAG} -n dev
+                    kubectl rollout status deployment/campus-app -n dev --timeout=120s
+                """
+            }
+        }
+
+        stage('Deploy to Staging') {
+            steps {
+                sh """
+                    kubectl set image deployment/campus-app campus-app=${ECR_REPO}:${IMAGE_TAG} -n staging
+                    kubectl rollout status deployment/campus-app -n staging --timeout=120s
+                """
+            }
+        }
+
+        stage('Smoke Test - Staging') {
+            steps {
+                sh '''
+                    STAGING_URL=$(kubectl get svc campus-app-svc -n staging -o jsonpath='{.spec.clusterIP}')
+                    curl -f http://${STAGING_URL}/health || (echo "Smoke test failed" && exit 1)
+                '''
+            }
+        }
+
+        stage('Manual Approval for Production') {
+            steps {
+                input message: "Deploy build ${IMAGE_TAG} to PRODUCTION?", ok: "Deploy"
+            }
+        }
+
+        stage('Deploy to Production') {
+            steps {
+                sh """
+                    kubectl set image deployment/campus-app campus-app=${ECR_REPO}:${IMAGE_TAG} -n production
+                    kubectl rollout status deployment/campus-app -n production --timeout=180s
+                """
+            }
+        }
+
+        stage('Post-Deploy Health Check') {
+            steps {
+                sh '''
+                    PROD_URL=$(kubectl get svc campus-app-svc -n production -o jsonpath='{.spec.clusterIP}')
+                    sleep 5
+                    curl -f http://${PROD_URL}/health || (echo "Production health check failed" && exit 1)
+                '''
+            }
+        }
+    }
+
+    post {
+        failure {
+            echo "Pipeline failed - rolling back production deployment to previous revision"
+            sh "kubectl rollout undo deployment/campus-app -n production || true"
+        }
+        success {
+            echo "Release ${IMAGE_TAG} deployed successfully to production."
+        }
+        always {
+            sh "docker rmi ${ECR_REPO}:${IMAGE_TAG} || true"
+            sh "docker rmi ${ECR_REPO}:latest || true"
+        }
+    }
 }
 
-stages {
 
-    stage('Checkout') {
-        steps {
-            checkout scm
-        }
-    }
 
-    stage('Check Files') {
-        steps {
-            sh '''
-                echo "===== WORKSPACE ====="
-                pwd
 
-                echo "===== FILES ====="
-                ls -la
 
-                echo "===== KUBERNETES FILES ====="
-                find k8s -type f
-            '''
-        }
-    }
 
-    stage('Login to AWS ECR') {
-        steps {
-            sh 'aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${ECR_REGISTRY}'
-        }
-    }
 
-    stage('Build Docker Image') {
-        steps {
-            sh 'docker build -t ${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG} .'
-        }
-    }
 
-    stage('Push Docker Image') {
-        steps {
-            sh 'docker push ${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}'
-        }
-    }
 
-    stage('Deploy to Staging') {
-        steps {
-            sh 'kubectl apply -f k8s/namespaces.yaml'
-            sh 'kubectl apply -f k8s/k8s/deployment.yaml -n staging'
-        }
-    }
 
-    stage('Check Staging Deployment') {
-        steps {
-            sh 'kubectl get pods -n staging'
-            sh 'kubectl get deployment -n staging'
-        }
-    }
 
-    stage('Production Approval') {
-        steps {
-            input message: 'Do you want to deploy to Production?', ok: 'Deploy'
-        }
-    }
-
-    stage('Deploy to Production') {
-        steps {
-            sh 'kubectl apply -f k8s/k8s/deployment.yaml -n production'
-        }
-    }
-
-    stage('Check Production Deployment') {
-        steps {
-            sh 'kubectl get pods -n production'
-            sh 'kubectl get deployment -n production'
-        }
-    }
-}
-
-post {
-    success {
-        echo 'Pipeline completed successfully!'
-    }
-
-    failure {
-        echo 'Pipeline failed. Check Console Output.'
-    }
-
-    always {
-        echo 'Pipeline execution completed.'
-    }
-}
-
-}
+   
