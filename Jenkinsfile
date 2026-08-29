@@ -88,7 +88,7 @@ pipeline {
 
                     echo "Staging Service IP: ${STAGING_URL}"
 
-                    curl -f http://${STAGING_URL}/health || \
+                    curl -f http://${STAGING_URL}/actuator/health || \
                     (echo "Smoke test failed" && exit 1)
                 '''
             }
@@ -125,7 +125,7 @@ pipeline {
 
                     sleep 5
 
-                    curl -f http://${PROD_URL}/health || \
+                    curl -f http://${PROD_URL}/actuator/health || \
                     (echo "Production health check failed" && exit 1)
                 '''
             }
