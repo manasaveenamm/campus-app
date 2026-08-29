@@ -2,10 +2,9 @@ pipeline {
     agent any
 
     environment {
-        AWS_REGION   = "ap-south-1"
-        ECR_REPO     = "417780656027.dkr.ecr.ap-south-1.amazonaws.com/campus-app"
-        SHORT_COMMIT = "${env.GIT_COMMIT ? env.GIT_COMMIT.take(7) : 'local'}"
-        IMAGE_TAG    = "${env.BUILD_NUMBER}-${SHORT_COMMIT}"
+        AWS_REGION = "ap-south-1"
+        ECR_REPO   = "417780656027.dkr.ecr.ap-south-1.amazonaws.com/campus-app"
+        IMAGE_TAG  = "${BUILD_NUMBER}-${GIT_COMMIT ? GIT_COMMIT.take(7) : 'local'}"
     }
 
     options {
@@ -23,21 +22,20 @@ pipeline {
 
         stage('Build & Unit Test') {
             steps {
-                dir('application') {
-                    sh 'mvn clean test package -B'
-                }
+                sh 'mvn clean test package -B'
             }
+
             post {
                 always {
-                    junit 'application/target/surefire-reports/*.xml'
+                    junit allowEmptyResults: true,
+                          testResults: 'target/surefire-reports/*.xml'
                 }
-                // Pipeline fails automatically here if tests fail - no further stages run
             }
         }
 
         stage('Docker Build') {
             steps {
-                sh "docker build -f docker/Dockerfile -t ${ECR_REPO}:${IMAGE_TAG} ."
+                sh "docker build -f Dockerfile -t ${ECR_REPO}:${IMAGE_TAG} ."
                 sh "docker tag ${ECR_REPO}:${IMAGE_TAG} ${ECR_REPO}:latest"
             }
         }
@@ -46,7 +44,9 @@ pipeline {
             steps {
                 sh """
                     aws ecr get-login-password --region ${AWS_REGION} | \
-                    docker login --username AWS --password-stdin ${ECR_REPO}
+                    docker login --username AWS --password-stdin \
+                    417780656027.dkr.ecr.${AWS_REGION}.amazonaws.com
+
                     docker push ${ECR_REPO}:${IMAGE_TAG}
                     docker push ${ECR_REPO}:latest
                 """
@@ -56,8 +56,12 @@ pipeline {
         stage('Deploy to Dev') {
             steps {
                 sh """
-                    kubectl set image deployment/campus-app campus-app=${ECR_REPO}:${IMAGE_TAG} -n dev
-                    kubectl rollout status deployment/campus-app -n dev --timeout=120s
+                    kubectl set image deployment/campus-app \
+                    campus-app=${ECR_REPO}:${IMAGE_TAG} \
+                    -n dev
+
+                    kubectl rollout status deployment/campus-app \
+                    -n dev --timeout=120s
                 """
             }
         }
@@ -65,8 +69,12 @@ pipeline {
         stage('Deploy to Staging') {
             steps {
                 sh """
-                    kubectl set image deployment/campus-app campus-app=${ECR_REPO}:${IMAGE_TAG} -n staging
-                    kubectl rollout status deployment/campus-app -n staging --timeout=120s
+                    kubectl set image deployment/campus-app \
+                    campus-app=${ECR_REPO}:${IMAGE_TAG} \
+                    -n staging
+
+                    kubectl rollout status deployment/campus-app \
+                    -n staging --timeout=120s
                 """
             }
         }
@@ -74,23 +82,34 @@ pipeline {
         stage('Smoke Test - Staging') {
             steps {
                 sh '''
-                    STAGING_URL=$(kubectl get svc campus-app-svc -n staging -o jsonpath='{.spec.clusterIP}')
-                    curl -f http://${STAGING_URL}/health || (echo "Smoke test failed" && exit 1)
+                    STAGING_URL=$(kubectl get svc campus-app-svc \
+                        -n staging \
+                        -o jsonpath='{.spec.clusterIP}')
+
+                    echo "Staging Service IP: ${STAGING_URL}"
+
+                    curl -f http://${STAGING_URL}/health || \
+                    (echo "Smoke test failed" && exit 1)
                 '''
             }
         }
 
         stage('Manual Approval for Production') {
             steps {
-                input message: "Deploy build ${IMAGE_TAG} to PRODUCTION?", ok: "Deploy"
+                input message: "Deploy build ${IMAGE_TAG} to PRODUCTION?",
+                      ok: "Deploy"
             }
         }
 
         stage('Deploy to Production') {
             steps {
                 sh """
-                    kubectl set image deployment/campus-app campus-app=${ECR_REPO}:${IMAGE_TAG} -n production
-                    kubectl rollout status deployment/campus-app -n production --timeout=180s
+                    kubectl set image deployment/campus-app \
+                    campus-app=${ECR_REPO}:${IMAGE_TAG} \
+                    -n production
+
+                    kubectl rollout status deployment/campus-app \
+                    -n production --timeout=180s
                 """
             }
         }
@@ -98,37 +117,39 @@ pipeline {
         stage('Post-Deploy Health Check') {
             steps {
                 sh '''
-                    PROD_URL=$(kubectl get svc campus-app-svc -n production -o jsonpath='{.spec.clusterIP}')
+                    PROD_URL=$(kubectl get svc campus-app-svc \
+                        -n production \
+                        -o jsonpath='{.spec.clusterIP}')
+
+                    echo "Production Service IP: ${PROD_URL}"
+
                     sleep 5
-                    curl -f http://${PROD_URL}/health || (echo "Production health check failed" && exit 1)
+
+                    curl -f http://${PROD_URL}/health || \
+                    (echo "Production health check failed" && exit 1)
                 '''
             }
         }
     }
 
     post {
+
         failure {
-            echo "Pipeline failed - rolling back production deployment to previous revision"
-            sh "kubectl rollout undo deployment/campus-app -n production || true"
+            echo "Pipeline failed - attempting production rollback"
+
+            sh '''
+                kubectl rollout undo deployment/campus-app \
+                -n production || true
+            '''
         }
+
         success {
             echo "Release ${IMAGE_TAG} deployed successfully to production."
         }
+
         always {
             sh "docker rmi ${ECR_REPO}:${IMAGE_TAG} || true"
             sh "docker rmi ${ECR_REPO}:latest || true"
         }
     }
 }
-
-
-
-
-
-
-
-
-
-
-
-   
